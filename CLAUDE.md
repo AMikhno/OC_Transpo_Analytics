@@ -4,6 +4,12 @@ Agent constitution. Read fully before any task. If an instruction here conflicts
 with a prompt, STOP and ask. This file + `spec.md` + `plan.md` + `validation.md`
 + `DECISIONS.md` are the complete source of truth; the conversation is not.
 
+Note for planning sessions (plan mode / opusplan): the 2026-07 capture-layer
+red-team audit is fully folded into these documents as DR-027..DR-035 and the
+corresponding spec/RUNBOOK/CASES amendments. Plan from the **updated docs
+only** — do not read or re-derive from the original audit report; where the
+report and the committed docs differ, the docs win.
+
 ## 1. Project identity
 
 Public, bilingual (EN/FR), non-commercial accountability site measuring OC Transpo
