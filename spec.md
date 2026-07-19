@@ -77,6 +77,22 @@ validated against the GTFS-RT enum; unknown values are quarantined with reason
   quarantine with `type=unknown_enum`, not in parsed.
 - **AC-5.2.2**: every parsed record carries `_ingested_at` (UTC epoch of fetch)
   and `feed_timestamp`.
+- **AC-5.2.3 (parsed field contract — DR-030)**: parsed is the sole build
+  input (AC-5.4.1), so fields dropped here are lost to v1. Every parsed
+  TripUpdates record preserves verbatim: trip_id, route_id, direction_id,
+  start_date, start_time, schedule_relationship (trip- and stop-level),
+  vehicle.id, and for every stop_time_update: stop_id, stop_sequence,
+  arrival {time, delay, uncertainty}, departure {time, delay, uncertainty}.
+  VehiclePositions: vehicle.id, full trip descriptor, position, timestamp,
+  occupancy if present. A fixture asserts round-trip of every listed field.
+  (Live check 2026-07-19: feed emits absolute arrival times today, 16/500
+  events departure-only — the delay/uncertainty fields are kept because
+  GTFS-RT permits the form to change.)
+- **AC-5.2.4 (raw is pre-decode — DR-030)**: the raw archive write is the
+  verbatim HTTP response body, written before any decode attempt. A payload
+  failing protobuf decode still archives to raw/, lands one QuarantineRecord
+  (`errors[0].type="decode_failed"`, raw_record = body sha256 + first 1 KB
+  base64) and a ledger row with outcome=decode_failed (CASES F-C11).
 
 ### 5.3 Quarantine contract
 `QuarantineRecord = {feed, fetched_at, entity_id, raw_record, errors:
@@ -99,14 +115,26 @@ static/{yyyy-mm-dd}/gtfs_{sha256-8}.zip + manifest.json
   `static/`; raw is archive only, never a build input.
 - **AC-5.4.2**: two consecutive identical static zips produce one stored object
   (sha256 dedupe) and a manifest entry noting the no-change check.
+- **AC-5.4.3 (UTC paths — DR-029)**: all landing-path dates and hours
+  (`yyyy-mm-dd`, `HH`) are derived from the poll's UTC epoch; bundle
+  boundaries are UTC hours. America/Toronto never appears in landing paths
+  (it enters only in v1 model logic). The DST fall-back day yields 25
+  distinct hour objects, spring-forward 23 — no collision, no gap ambiguity.
+- **AC-5.4.4 (staging — DR-028)**: per-poll files are written under a local
+  `staging/` tree outside the mirrored layout; only the layout above is
+  synced. `rclone ls` of the bucket shows zero per-poll objects. Per-poll
+  staging files are deleted solely per FR-Y1's post-check rule.
 
 ## 6. Functional requirements
 
-### FR-C — Collector (extends existing `ingestion/`)
+### FR-C — Collector (greenfield `ingestion/` package — DR-035)
 - **FR-C1 Atomic, collision-safe raw writes.** Temp-file + rename; filename
   includes a monotonic or content-hash suffix; open mode excludes overwrite.
   AC: two writes within the same second on the same feed produce two files;
-  kill -9 during write leaves no partial file visible in `raw/`.
+  kill -9 during write leaves no partial file visible in `raw/`; a failed
+  write (e.g., ENOSPC) records outcome=write_failed and withholds the
+  FR-Y3 dead-man ping — the collector never silently polls without landing
+  data on disk.
 - **FR-C2 Bounded retry.** Per-feed: ≤3 attempts, exponential backoff + jitter,
   total ≤ poll interval budget. AC: with a mocked 2×failure→success endpoint,
   one poll cycle succeeds and logs 2 retries; with permanent failure, the cycle
@@ -117,10 +145,13 @@ static/{yyyy-mm-dd}/gtfs_{sha256-8}.zip + manifest.json
   AC: fixture with EN+FR translations round-trips both.
 - **FR-C5 Staleness detection + poll ledger.** Every cycle appends one ledger
   row per enabled feed: {feed, cycle_ts, outcome, http_status, unchanged,
-  retries, _ingested_at}. If payload content-hash equals the previous poll's,
+  retries, _ingested_at, entity_count, parsed_count, quarantine_count,
+  feed_header_ts}. Outcome enum: {ok, failed, decode_failed, write_failed}
+  (DR-027). If payload content-hash equals the previous poll's,
   mark unchanged=true and skip re-storing parsed output (raw still archives).
   The ledger is the Bronze source for poll success rate, unchanged share, and
-  post-hoc FR-C8 audit (DR-010: published numbers derive from landed data).
+  post-hoc FR-C8 audit (DR-010: published numbers derive from landed data) —
+  the counts make "collector wrote nothing" auditable and alertable.
   AC: replaying the same fixture twice stores parsed once and lands two ledger
   rows, the second with unchanged=true; a failed cycle still lands a ledger
   row with its outcome (CASES F-C10).
@@ -130,34 +161,62 @@ static/{yyyy-mm-dd}/gtfs_{sha256-8}.zip + manifest.json
   streamed download. AC: oversized fixture URL aborts with a clear error and
   no partial file.
 - **FR-C8 Per-feed failure alerting.** ≥N consecutive **post-retry failed
-  cycles** for any single feed (cycle fails after FR-C2 retries exhaust:
-  non-2xx, timeout, or connection error; default 10) triggers a
-  healthchecks fail-ping naming the feed — distinct from the dead-man channel,
-  so feed death and host death are distinguishable. AC: mocked 404 streak
+  cycles** for any single feed (cycle outcome ∈ {failed, decode_failed,
+  write_failed} after FR-C2 retries exhaust; default 10) triggers a
+  healthchecks fail-ping naming the feed and reason — on the dedicated
+  `octranspo-feeds` check (DR-032), distinct from the dead-man channel,
+  so feed death and host death are distinguishable. **Staleness alert
+  (DR-027)**: if a feed's `feed_header_ts` fails to advance for
+  STALE_FEED_ALERT_S (default 1800 s), fire a fail-ping naming the feed
+  with reason `stale_feed` — no service-hours gate needed: the header is
+  verified to tick 24/7 (live check 2026-07-19, 04:22 EDT); threshold
+  re-tuned after the 48 h volumetrics window. AC: mocked 404 streak
   fires exactly one alert ping naming the feed; recovery clears state; a
-  mixed cycle (one feed failing, others fine) never suppresses the streak.
+  mixed cycle (one feed failing, others fine) never suppresses the streak;
+  a frozen-payload mock (200, identical bytes, frozen header) fires the
+  staleness ping at threshold, exactly once, and recovery clears it.
 - **FR-C9 Graceful shutdown.** SIGTERM finishes the in-flight poll, flushes,
   exits 0 (systemd-friendly). AC: SIGTERM during a loop leaves valid files and
   a clean exit code.
 
 ### FR-Y — Sync & ops (`ops/`)
-- **FR-Y1 Hourly bundler.** Closes the previous hour: raw .pb → tar.zst;
-  parsed/quarantine per-poll files → single .jsonl.gz per hour. Idempotent.
-  AC: rerunning the bundler on an already-bundled hour is a no-op (exit 0,
-  no duplicate objects).
+- **FR-Y1 Hourly bundler.** Each run enumerates **all** closed UTC hours
+  with staged per-poll files and no valid bundle manifest, and bundles each,
+  oldest first (never only "the previous hour" — a multi-hour outage must
+  not strand captured data, DR-028): raw .pb → tar.zst; parsed/quarantine
+  per-poll files → single .jsonl.gz per hour. **Atomic finalization**:
+  bundles are written to a temp path and renamed only after compressor
+  close + fsync (same guarantee as FR-C1); after rename a sidecar manifest
+  {hour, member_count, member_bytes, sha256} is written. **Idempotence is
+  manifest+checksum, never file existence**: an hour counts as bundled iff
+  the manifest exists AND the bundle's sha256 matches; mismatch or missing
+  manifest → rebuild from per-poll sources. An hour with zero records still
+  produces a zero-count manifest — absence of an hour always means capture
+  failure, member_count=0 always means quiet feed (DR-027). Per-poll
+  staging files are deleted only after their hour's bundle passes `rclone
+  check` against R2. AC: rerunning on a bundled hour is a no-op (exit 0,
+  identical checksums); kill -9 mid-bundle leaves no final-path bundle or
+  one the next run detects and rebuilds (CASES F-Y06/F-Y07); a 3-hour
+  staged backlog yields 3 bundles in one run (F-Y08); every bundle's
+  member_count equals its hour's per-poll file count.
 - **FR-Y2 Verified sync.** rclone copy to R2 then `rclone check`; only
   checked hours become prune-eligible; prune after RETENTION_DAYS (default 7).
   AC: simulated failed upload (wrong bucket) leaves local files intact and
   exits non-zero; successful path prunes only checked, aged hours.
-- **FR-Y3 Dead-man wiring (process liveness).** The collector pings its
-  healthchecks check on every *completed* cycle regardless of per-feed
-  outcomes (feed health is FR-C8's separate channel); bundler/sync and static
-  snapshot ping their own checks. AC: stopping the timer produces an alert
-  within the grace window; a persistently failing single feed keeps the
-  dead-man green while FR-C8 fires (CASES F-Y05) — the two failure modes are
-  never conflated.
-- **FR-Y4 systemd units** for collector loop, hourly bundler+sync, daily static
-  snapshot; installable via documented commands; survive reboot (enabled).
+- **FR-Y3 Dead-man wiring (data-write liveness — DR-027).** The collector
+  pings its healthchecks check only after a cycle whose ledger row and raw
+  payloads were durably written without error — a write_failed cycle
+  withholds the ping, so disk failure surfaces as a dead-man alert within
+  the grace window. Per-feed *fetch* health stays on FR-C8's separate
+  channel; bundler/sync and static snapshot ping their own checks. AC:
+  stopping the collector service produces an alert within the grace window; an
+  unwritable data dir produces one within the grace window; a persistently
+  failing single feed keeps the dead-man green while FR-C8 fires (CASES
+  F-Y05) — the failure modes are never conflated.
+- **FR-Y4 systemd units**: collector as a long-running restarting service
+  (`Restart=on-failure`, DR-034 — never a self-overlapping timer); hourly
+  bundler+sync and daily static snapshot as timers; installable via
+  documented commands; survive reboot (enabled).
   AC: `systemctl status` shows all three active after a VPS reboot.
 
 ### FR-W — Warehouse build (nightly, deterministic)
@@ -322,6 +381,9 @@ spike (FR-O6); volume drop (FR-O2).
 
 ## 8. Non-functional
 - **Cost ceiling**: VPS ≈ €4/mo; everything else free tier. Any change → DR.
+  Known open point: append-only raw in R2 will exceed the 10 GB free tier
+  within weeks-to-months of launch — the retention-vs-overage decision is
+  V-8, settled at V-P1 with measured volumetrics, never by ad-hoc deletion.
 - **Latency SLO**: site data current through the last complete service day
   (DR-011); build finishes < 15 min (DR-021 revisit trigger).
 - **Reproducibility**: same R2 state + same commit → same marts (FR-W1).
@@ -339,3 +401,8 @@ spike (FR-O6); volume drop (FR-O2).
 - **V-3** `mf query` on DuckDB availability — owner: agent, P3 first task.
   Determines FR-M2 primary vs fallback path.
 - **V-4** Evidence ↔ DuckDB version compatibility — owner: agent, P5 first task.
+- **V-8** R2 storage economics (raw retention vs paid overage) — owner: Ana,
+  decided at V-P1 from measured volumetrics; becomes a DR. Blocks nothing.
+- **V-9** R2 "Object Read & Write" token delete capability — owner: Ana,
+  30-second `rclone deletefile` test at bucket setup (RUNBOOK §3); outcome
+  sets DR-033's posture. Blocks nothing.

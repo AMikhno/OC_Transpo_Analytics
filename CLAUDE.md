@@ -4,6 +4,12 @@ Agent constitution. Read fully before any task. If an instruction here conflicts
 with a prompt, STOP and ask. This file + `spec.md` + `plan.md` + `validation.md`
 + `DECISIONS.md` are the complete source of truth; the conversation is not.
 
+Note for planning sessions (plan mode / opusplan): the 2026-07 capture-layer
+red-team audit is fully folded into these documents as DR-027..DR-035 and the
+corresponding spec/RUNBOOK/CASES amendments. Plan from the **updated docs
+only** — do not read or re-derive from the original audit report; where the
+report and the committed docs differ, the docs win.
+
 ## 1. Project identity
 
 Public, bilingual (EN/FR), non-commercial accountability site measuring OC Transpo
@@ -16,7 +22,7 @@ credibility. v1 deliberately excludes Databricks (see DECISIONS.md DR-014).
 
 | Layer | Tool | Notes |
 |---|---|---|
-| Collector | Python 3.12, uv, httpx, Pydantic v2, Typer | existing `ingestion/` package |
+| Collector | Python 3.12, uv, httpx, Pydantic v2, Typer | greenfield `ingestion/` package (DR-035) |
 | Raw store | Local disk → Cloudflare R2 via rclone | layout per spec §5.4 |
 | Warehouse | DuckDB via dbt-duckdb (dbt Core, latest 1.x) | nightly full rebuild |
 | Transform | dbt + dbt-utils + dbt-expectations (metaplane fork, >=0.10,<0.11) | tz var `America/Toronto` |
@@ -33,7 +39,7 @@ Airflow/Dagster/Prefect, Docker (VPS runs bare systemd), any paid service.
 ## 3. Repository layout
 
 ```
-ingestion/            # collector package (exists; extend, don't rewrite)
+ingestion/            # collector package (greenfield — DR-035)
 ops/                  # NEW: bundler, rclone sync, systemd units, healthcheck ping
 dbt/                  # dbt project: models/{staging,intermediate,core,marts}
   models/semantic/    # MetricFlow semantic models + metrics YAML

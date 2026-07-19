@@ -11,8 +11,12 @@ sprawl. Ana may provision the VPS (V-P1 prep) while P0 is in progress.
 
 ---
 
-## Phase 0 — Collector hardening (agent, local)
-Exit: existing collector satisfies FR-C1..C9 + §5.2/5.3 on fixtures; CI green.
+## Phase 0 — Collector build (agent, local)
+Exit: collector satisfies FR-C1..C9 + §5.2/5.3 on fixtures; CI green.
+Note (DR-035): no prior scaffold exists — P0 is a **greenfield build**, not
+hardening. Re-estimate before starting; if the estimate threatens the
+capture start date, split: capture-integrity subset first (FR-C1/C2/C3/C5 +
+minimal AC-5.2.3 parse), remainder rides parallel with P1's 48 h window.
 
 - **P0.1** Fixture harness: deterministic .pb fixtures + builders for all §7
   collector cases; wire `make check`. Done when: pytest runs fixtures offline.
@@ -43,8 +47,10 @@ Exit: 48h of verified capture in R2; volumetrics recorded; alerts proven.
 - **P1.4** (Ana) Kill-tests: stop timer → dead-man alert; wrong-bucket sync →
   non-zero + no prune; reboot → all units return (FR-Y4 AC).
 - **P1.5** (both) After 48h: run `ops/volumetrics.py` (agent writes) →
-  measured sizes/counts; update spec §8 + DECISIONS.md; confirm R2 free-tier
-  headroom.
+  measured sizes/counts; update spec §8 + DECISIONS.md; decide V-8 (R2
+  economics) from the measured number; confirm overnight feed_header_ts
+  advancement from the ledger (closes A8/DR-027 threshold tuning); check
+  the weekday TU-vs-VP coverage gap (V-10).
 - ✅ **Checkpoint V-P1**
 
 ## Phase 2 — Warehouse backbone (agent)

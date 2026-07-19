@@ -37,7 +37,7 @@ parity:
 	@if [ -f ops/parity.py ]; then uv run python ops/parity.py; \
 	else echo "parity: defined in P3.4"; exit 1; fi
 
-# ---- collector (exists from the original scaffold) ----
+# ---- collector (greenfield — built in P0, DR-035) ----
 collect-once:
 	uv run octranspo collect-once
 

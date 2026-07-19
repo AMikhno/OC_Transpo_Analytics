@@ -30,13 +30,16 @@ requiring judgment is marked ⚖ with the exact question to answer.
 ## V-P1 — Capture live (the checkpoint that matters most)
 
 1. `$ rclone ls r2:octranspo/parsed --max-depth 3 | head`
-   → **Expect:** hourly `.jsonl.gz` objects for every hour since start.
+   → **Expect:** an object or zero-count manifest for every **UTC** hour
+   since start — absence = incident; member_count=0 = quiet feed (DR-027/28).
+   Newest hour directory name matches `date -u +%H`.
 2. `$ rclone ls r2:octranspo/raw --max-depth 3 | head`
    → **Expect:** hourly `.tar.zst` bundles.
-3. Dead-man proof: `$ sudo systemctl stop octranspo-collect.timer` → wait grace
-   window → **Expect:** healthchecks email/push received. Restart; check green.
+3. Dead-man proof: `$ sudo systemctl stop octranspo-collect.service` → wait
+   grace window → **Expect:** healthchecks email AND push received.
+   Restart; check green.
 4. Reboot proof: `$ sudo reboot`; after 3 min:
-   `$ systemctl is-active octranspo-collect.timer octranspo-sync.timer octranspo-static.timer`
+   `$ systemctl is-active octranspo-collect octranspo-sync.timer octranspo-static.timer`
    → **Expect:** `active` ×3.
 5. Wrong-bucket drill: run sync with `R2_BUCKET=doesnotexist` →
    **Expect:** non-zero exit; local files still present.
@@ -47,6 +50,20 @@ requiring judgment is marked ⚖ with the exact question to answer.
 7. Static dedupe: after ≥2 daily snapshot runs with unchanged schedule:
    `$ rclone ls r2:octranspo/static` → **Expect:** one zip, manifest showing
    two check entries.
+8. Staleness alert (RUNBOOK drill 5): frozen-payload feed → **Expect:**
+   `stale_feed` fail-ping on `octranspo-feeds` within STALE_FEED_ALERT_S;
+   collector check green throughout; recovery clears.
+9. Decode failure (RUNBOOK drill 6): 200+HTML feed → **Expect:** fail-ping
+   at streak N; payload present in raw/ AND quarantine (AC-5.2.4); ledger
+   rows show outcome=decode_failed.
+10. Bundle atomicity: kill the bundler mid-run (harness SIGKILL on a large
+    staged hour), rerun → **Expect:** `zstd -t` passes on the bundle;
+    manifest member_count equals the hour's per-poll file count.
+11. Backlog sweep (RUNBOOK drill 7): 3 h bundler outage → **Expect:** all
+    missing hours in R2 within one cycle, oldest first.
+12. Hygiene: `$ rclone ls r2:octranspo | grep -c staging` → 0 (per-poll
+    files never sync, AC-5.4.4); `$ stat -f %Lp .env` (BSD) / `stat -c %a`
+    (Linux) → 600; drill-1 alert arrived on **both** channels.
 
 ## V-P2 — Warehouse backbone (hand-verified numbers)
 
