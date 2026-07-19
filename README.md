@@ -44,6 +44,9 @@ of everything else.
 
 Requires [uv](https://docs.astral.sh/uv/) and Python 3.12+.
 
+> The commands below are the collector's target interface — the package is
+> built in plan.md P0 (DR-035) and lands with its first task.
+
 ```bash
 uv sync --all-groups
 cp .env.example .env && $EDITOR .env    # OCTRANSPO_API_KEY

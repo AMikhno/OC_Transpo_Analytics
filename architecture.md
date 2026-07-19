@@ -43,15 +43,19 @@ never loss of synced data (DR-008). Build failure = stale-but-correct site
   the source's GPS update rate (DR-012).
 - **Boundary validation**: Pydantic producer contracts; enum-checked
   schedule_relationship; failures → quarantine with the §5.3 (spec) contract.
-- **Immutability**: raw .pb archived atomically, collision-safe, append-only;
-  hourly tar.zst bundles. Parsed/quarantine → hourly .jsonl.gz (directly
+- **Immutability**: raw .pb = verbatim pre-decode HTTP body (DR-030),
+  archived atomically, collision-safe, append-only; hourly tar.zst bundles,
+  atomically finalized with checksum manifests, all boundaries and paths
+  UTC (DR-028/029). Parsed/quarantine → hourly .jsonl.gz (directly
   warehouse-readable). Static GTFS daily, sha256-deduped, manifest-tracked.
 - **Citizenship**: content-hash unchanged-poll detection (skip re-store;
   every cycle lands a per-feed ledger row — outcome, unchanged flag,
-  retries), bounded retry with jitter (≤3, inside the interval budget).
-- **Observability at the edge**: healthchecks dead-man (collector cycle,
-  bundler+sync, static snapshot as separate checks), endpoint-change alert on
-  401/404 streaks (beta URLs will move).
+  retries, record counts, feed header ts), bounded retry with jitter
+  (≤3, inside the interval budget).
+- **Observability at the edge**: healthchecks dead-man proves data was
+  *written*, not merely that the process runs (DR-027); separate checks for
+  bundler+sync and static snapshot; per-feed alerts (401/404 streaks,
+  decode failures, stale feed header) on a dedicated feeds check (DR-032).
 
 ## 4. v1 warehouse design (dbt on DuckDB)
 
@@ -152,6 +156,7 @@ collector-side counters are operational telemetry only.
 | POLL_INTERVAL_S | 30 | collector | feed poll cadence (DR-012) |
 | RETRY_MAX / RETRY_BASE_MS | 3 / 500 | collector | bounded backoff |
 | ENDPOINT_FAIL_STREAK | 10 | collector | per-feed consecutive fetch-failure alert threshold (FR-C8) |
+| STALE_FEED_ALERT_S | 1800 | collector | feed-header-age fail-ping threshold, 24/7 (DR-027; re-tuned at V-P1) |
 | STALE_BANNER_DAYS | 3 | site | public staleness banner trigger (FR-P4) |
 | STATIC_MAX_MB | 200 | collector | snapshot download cap |
 | RETENTION_DAYS | 7 | ops | local prune age (post-verified sync) |

@@ -100,6 +100,48 @@ last. Open items at the bottom. Format: `DR-NNN: decision — rationale.`
   (f) volume test activates per day_type at ≥4 prior periods;
   (g) quality marts split by grain (daily vs feed-daily).
 
+## Capture-layer red-team audit (2026-07-19; findings F-01…F-16 accepted)
+- **DR-027**: Dead-man semantics = "data captured and durably written", not
+  "process alive": ledger rows carry entity/parsed/quarantine counts +
+  feed_header_ts; outcome enum {ok, failed, decode_failed, write_failed};
+  FR-C8 streaks cover decode/write failures; a stale-feed-header alert
+  (STALE_FEED_ALERT_S, default 1800 s) fires 24/7 — no service-hours gate,
+  the header verifiably ticks overnight (live poll 04:22 EDT); write
+  failures withhold the dead-man ping. Threshold re-tuned after 48 h.
+- **DR-028**: Bundle finalization is atomic (temp+rename+fsync) with a
+  post-rename manifest {hour, member_count, member_bytes, sha256};
+  idempotence = manifest+checksum match, never file existence; the bundler
+  sweeps ALL unbundled closed hours, oldest first; empty hours produce
+  zero-count manifests (absence = incident, zero = quiet feed); per-poll
+  staging files are pruned only after their bundle passes `rclone check`.
+- **DR-029**: All landing paths and bundle boundaries are UTC; VPS clock is
+  UTC + NTP-verified at provision; America/Toronto exists only at v1
+  presentation/service-date edges. (Kills the DST fall-back double-hour
+  collision by construction.)
+- **DR-030**: Parsed record field contract enumerated (spec AC-5.2.3) —
+  parsed is the sole build input, so the contract is capture-critical. Raw
+  is the verbatim pre-decode HTTP body (AC-5.2.4); undecodable payloads
+  archive + quarantine, never discard. Live check 2026-07-19: feed emits
+  absolute arrival times (delay-only: 0/500), start_date on 53/53 TU at
+  4:22 am (the hardest window) — spec §4 fallback is a true edge path.
+- **DR-032**: FR-C8 fail-pings use a dedicated healthchecks check
+  (`octranspo-feeds`); the dead-man channel is reserved for
+  host/process/data-write liveness. (Resolves the spec-vs-RUNBOOK
+  contradiction in favor of the spec.)
+- **DR-033**: The VPS's R2 write token is assumed delete-capable until the
+  V-9 test says otherwise; R2 has no versioning/object-lock. Compensations:
+  non-deleting `rclone copy` only, monthly object-count tamper log,
+  quarterly offline copy of parsed/ledger/static (the irreplaceable build
+  inputs) once volumetrics are known.
+- **DR-034**: Collector runs as a long-running restarting systemd service
+  (`Restart=on-failure`); bundler+sync and static snapshot are timers;
+  overlap excluded by design; ledger cadence (~2,880 rows/day/feed) is the
+  crash-loop tripwire.
+- **DR-035**: No prior collector scaffold exists (verified: repo history is
+  docs-only; `octranspo-reliability` repo doesn't exist). P0 is greenfield;
+  CLAUDE.md/README/Makefile/RUNBOOK corrected; P0 re-estimated before it
+  starts, with capture start date as the driving constraint.
+
 ## Product & legal
 - **DR-019**: Project is non-commercial and publicly served. Code license
   Apache-2.0; OC Transpo attribution per developer terms; a visible
@@ -132,3 +174,13 @@ last. Open items at the bottom. Format: `DR-NNN: decision — rationale.`
 - **V-7**: Check whether OC Transpo static GTFS uses frequencies.txt
   (frequency-based trips would change schedule expansion FR-W4) — one look at
   the snapshot zip; expected absent; record either way.
+- **V-8**: R2 storage economics — append-only raw exceeds the 10 GB free
+  tier within weeks-to-months; decide raw retention vs paid overage
+  (≈$0.015/GB·mo) at V-P1 from measured volumetrics; outcome recorded as
+  **DR-031** (number reserved). Never ad-hoc deletion.
+- **V-9**: Can the "Object Read & Write" R2 token delete objects?
+  `rclone deletefile` test at bucket setup (RUNBOOK §3); outcome sets
+  DR-033's posture.
+- **V-10**: Weekday TU-vs-VP coverage gap — overnight sample (Sun 04:22)
+  showed TU 53 trips vs VP 91 vehicles (42% gap vs the ~5% daytime caveat);
+  re-measure on a weekday at V-P1 before reading anything into it.

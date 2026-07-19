@@ -56,6 +56,8 @@ contains only known relationships.
 | F-C08 | 10 consecutive mocked 404s; then 200 | exactly one endpoint-alert ping at streak=10; recovery resets state (no second ping) |
 | F-C09 | SIGTERM mid-poll during collect-loop | in-flight poll completes; exit code 0; no .tmp files remain |
 | F-C10 | One cycle: TripUpdates OK, VehiclePositions times out (retries exhausted) | ledger lands one row per enabled feed: TU outcome=ok, VP outcome=failed with retries=3; parsed only for TU |
+| F-C11 | Endpoint returns 200 with an undecodable body (HTML page) | raw archives the verbatim body (AC-5.2.4); one quarantine record errors[0].type="decode_failed"; ledger row outcome=decode_failed; parsed absent |
+| F-C12 | Feed serves identical payload (frozen header) for STALE_FEED_ALERT_S | exactly one stale_feed fail-ping naming the feed; recovery resets state (no second ping) |
 
 ## C. Ops cases (spec FR-Y*)
 
@@ -65,7 +67,11 @@ contains only known relationships.
 | F-Y02 | Sync with R2_BUCKET=nonexistent | non-zero exit; zero local files pruned |
 | F-Y03 | Sync OK, hour age < RETENTION_DAYS | uploaded + checked; NOT pruned |
 | F-Y04 | Sync OK, hour age ≥ RETENTION_DAYS | pruned locally; present in R2 |
-| F-Y05 | VehiclePositions mocked to fail 12 consecutive cycles; TripUpdates healthy | dead-man stays green (process alive, FR-Y3); FR-C8 fail-ping fires once at streak 10 naming vehicle_positions; TripUpdates data unaffected |
+| F-Y05 | VehiclePositions mocked to fail 12 consecutive cycles; TripUpdates healthy | dead-man stays green (FR-Y3); FR-C8 fail-ping fires once at streak 10 on octranspo-feeds naming vehicle_positions; TripUpdates data unaffected |
+| F-Y06 | kill -9 the bundler mid-bundle; rerun | no final-path partial visible, or rerun detects manifest mismatch and rebuilds; final bundle checksum equals a clean-run bundle's |
+| F-Y07 | Truncated bundle planted at final path, no/stale manifest; run bundler | hour is rebuilt from per-poll sources; manifest matches rebuilt bundle; `zstd -t` passes |
+| F-Y08 | Per-poll files staged for 3 non-contiguous past hours; one bundler run | 3 bundles produced, oldest first; each manifest member_count = that hour's per-poll count |
+| F-Y09 | Closed hour with zero per-poll records (quiet feed) | zero-count manifest produced; hour is never "absent"; sync uploads it |
 
 ## D. Dimensional cases (spec FR-D2)
 
